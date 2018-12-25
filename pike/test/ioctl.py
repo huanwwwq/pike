@@ -39,6 +39,13 @@ import pike.model as model
 import pike.smb2 as smb2
 import pike.test as test
 
+share_all = smb2.FILE_SHARE_READ | \
+            smb2.FILE_SHARE_WRITE | \
+            smb2.FILE_SHARE_DELETE
+access_rwd = smb2.FILE_READ_DATA | \
+             smb2.FILE_WRITE_DATA | \
+             smb2.DELETE
+
 class ValidateNegotiateInfo(test.PikeTest):
     def __init__(self, *args, **kwds):
         super(ValidateNegotiateInfo, self).__init__(*args, **kwds)
@@ -51,3 +58,34 @@ class ValidateNegotiateInfo(test.PikeTest):
     def test_validate_negotiate_smb3(self):
         chan, tree = self.tree_connect()
         chan.validate_negotiate_info(tree)
+
+class TestIOCTL(test.PikeTest):
+    def session_bind(self, chan):
+        return chan.connection.client.connect(self.server).negotiate().session_setup(self.creds, bind=chan.session)
+
+    def setUp(self):
+        self.chan, self.tree = self.tree_connect()
+
+    def tearDown(self):
+        self.chan.tree_disconnect(self.tree)
+        self.chan.logoff()
+
+    def generic_ioctl_test_case(self):
+
+        filename = "ioctl_test_file.txt"
+        content = "Hello"
+        fh = self.chan.create(self.tree,
+                               filename,
+                               access=access_rwd,
+                               share=share_all,
+                               disposition=smb2.FILE_SUPERSEDE).result()
+
+        bytes_written = self.chan.write(fh, 0, content)
+
+        chan2 = self.session_bind(self.chan)
+        rt = self.chan.query_conn_info(fh)
+
+        self.chan.close(fh)
+
+    def test_ioctl_qeury_conn_info(self):
+        self.generic_ioctl_test_case()

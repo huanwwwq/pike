@@ -1975,6 +1975,46 @@ class Information(core.Frame):
         cur.encode_bytes(self.raw_data)
 
 
+class ConnInfo(core.Frame):
+    """
+    Base class for all info frames. Holds the raw data if no specific decoder
+    has been registered for the given info type
+    """
+    def __init__(self, parent = None):
+        super(ConnInfo, self).__init__(parent)
+        if parent is not None:
+            parent.append(self)
+        self.next_entry = 0
+        self.zid = 0
+        self.addr1 = 0
+        self.addr2 = 0
+        self.ClientFamily = 0
+        self.ClientPort = 0
+        self.ClientAddress = ""
+        self.ServerFamily = 0
+        self.ServerPort = 0
+        self.ServerAddress = ""
+
+    def _decode(self, cur):
+        """
+        decode the raw data to the specified end of buffer
+        """
+        self.next_entry = cur.decode_uint32le()
+        self.zid = cur.decode_uint32le()
+        self.ClientFamily = cur.decode_uint16le()
+        self.ClientPort = cur.decode_uint16be()
+        if self.ClientFamily == 2:
+            self.ClientAddress += str(cur.decode_uint8le()) + '.' + str(cur.decode_uint8le()) + '.' + str(
+                cur.decode_uint8le()) + '.' + str(cur.decode_uint8le())
+            cur.decode_bytes(120)
+
+        self.ServerFamily = cur.decode_uint16le()
+        self.ServerPort = cur.decode_uint16be()
+        if self.ServerFamily == 2:
+            self.ServerAddress += str(cur.decode_uint8le()) + '.' + str(cur.decode_uint8le()) + '.' + str(
+            cur.decode_uint8le()) + '.' + str(cur.decode_uint8le())
+            cur.decode_bytes(120)
+
 @QueryDirectoryResponse.file_information
 @QueryInfoResponse.information
 class FileInformation(Information):
@@ -3106,6 +3146,7 @@ class IoctlCode(core.ValueEnum):
     FSCTL_VALIDATE_NEGOTIATE_INFO      = 0x00140204
     FSCTL_SET_ZERO_DATA                = 0x000980C8
     FSCTL_SET_SPARSE                   = 0x000900C4
+    FSCTL_QUERY_FILE_SESSION_CONNECTION_INFO = 0x001424B8
 
 IoctlCode.import_items(globals())
 
@@ -3244,6 +3285,17 @@ class RequestResumeKeyRequest(IoctlInput):
     def  _encode(self, cur):
         pass
 
+class RequestConInfo(IoctlInput):
+    ioctl_ctl_code = FSCTL_QUERY_FILE_SESSION_CONNECTION_INFO
+
+    def __init__(self, parent):
+        IoctlInput.__init__(self, parent)
+        parent.ioctl_input = self
+        parent.max_output_response = 4096
+
+    def  _encode(self, cur):
+        pass
+
 class CopyChunkCopyRequest(IoctlInput):
     ioctl_ctl_code = FSCTL_SRV_COPYCHUNK
 
@@ -3335,6 +3387,24 @@ class RequestResumeKeyResponse(IoctlOutput):
    def _decode(self, cur):
         self.resume_key = cur.decode_bytes(24)
         self.context_length = cur.decode_uint32le()
+
+class RequestConInfoResponse(IoctlOutput):
+    ioctl_ctl_code = FSCTL_QUERY_FILE_SESSION_CONNECTION_INFO
+
+    def __init__(self, parent):
+        IoctlOutput.__init__(self, parent)
+        self._entries = []
+
+    def _children(self):
+        return self._entries
+
+    def append(self, e):
+        self._entries.append(e)
+
+    def _decode(self, cur):
+        ConnInfo(self).decode(cur)
+        while self._entries[-1].next_entry != 0:
+            ConnInfo(self).decode(cur)
 
 class CopyChunkCopyResponse(IoctlOutput):
    ioctl_ctl_code = FSCTL_SRV_COPYCHUNK
