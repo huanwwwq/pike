@@ -59,3 +59,27 @@ class OplockTest(pike.test.PikeTest):
         
         chan.close(handle1)
         chan.close(handle2)
+
+    def test_oplock_l2_break(self):
+        chan, tree = self.tree_connect()
+
+        share_all = pike.smb2.FILE_SHARE_READ | pike.smb2.FILE_SHARE_WRITE | pike.smb2.FILE_SHARE_DELETE
+
+        handle1 = chan.create(tree,
+                              'oplock.txt',
+                              share=share_all,
+                              oplock_level=pike.smb2.SMB2_OPLOCK_LEVEL_EXCLUSIVE).result()
+        
+        handle1.on_oplock_break(lambda level: level)
+        
+        handle2 = chan.create(tree,
+                              'oplock.txt',
+                              share=share_all,
+                              oplock_level=pike.smb2.SMB2_OPLOCK_LEVEL_II).result()
+        handle1.on_oplock_break(lambda level: level)
+        content = "something"
+        chan.write(handle2, 0, content)
+
+        
+        chan.close(handle1)
+        chan.close(handle2)
