@@ -33,7 +33,7 @@
 #
 # Authors: Brian Koropoff (brian.koropoff@emc.com)
 #
-
+import time
 import pike.model
 import pike.smb2
 import pike.test
@@ -83,3 +83,80 @@ class OplockTest(pike.test.PikeTest):
         
         chan.close(handle1)
         chan.close(handle2)
+
+    def test_oplock_break_exlusive_second_open_share_vialation(self):
+        chan, tree = self.tree_connect()
+
+        share_all = pike.smb2.FILE_SHARE_READ | pike.smb2.FILE_SHARE_WRITE | pike.smb2.FILE_SHARE_DELETE
+
+        handle1 = chan.create(tree,
+                              'oplock.txt',
+                              share=pike.smb2.FILE_SHARE_DELETE,
+                              oplock_level=pike.smb2.SMB2_OPLOCK_LEVEL_EXCLUSIVE).result()
+        
+        handle1.on_oplock_break(lambda level: level)
+        try:
+            handle2 = chan.create(tree,
+                              'oplock.txt',
+                              share=share_all,
+                              oplock_level=pike.smb2.SMB2_OPLOCK_LEVEL_II).result()
+        except Exception as e:
+            print("error is %s" % e)
+        else:
+            chan.close(handle2)
+        
+        chan.close(handle1)
+
+    def test_oplock_break_batch_second_open_share_vialation(self):
+        chan, tree = self.tree_connect()
+
+        share_all = pike.smb2.FILE_SHARE_READ | pike.smb2.FILE_SHARE_WRITE | pike.smb2.FILE_SHARE_DELETE
+
+        handle1 = chan.create(tree,
+                              'oplock.txt',
+                              share=pike.smb2.FILE_SHARE_DELETE,
+                              oplock_level=pike.smb2.SMB2_OPLOCK_LEVEL_BATCH).result()
+        
+        handle1.on_oplock_break(lambda level: level)
+        try:
+            handle2 = chan.create(tree,
+                              'oplock.txt',
+                              share=share_all,
+                              oplock_level=pike.smb2.SMB2_OPLOCK_LEVEL_II).result()
+        except Exception as e:
+            print("error is %s" % e)
+        else:
+            chan.close(handle2)
+        
+        chan.close(handle1)
+
+    def test_oplock_break_exlusive_second_open_take_write_lock(self):
+        buf = "Test from pike, this one is for oplock\n"
+        chan, tree = self.tree_connect()
+
+        share_all = pike.smb2.FILE_SHARE_READ | pike.smb2.FILE_SHARE_WRITE | pike.smb2.FILE_SHARE_DELETE
+
+        handle1 = chan.create(tree,
+                              'oplock.txt',
+                              share=share_all,
+                              oplock_level=pike.smb2.SMB2_OPLOCK_LEVEL_EXCLUSIVE).result()
+        chan.write(handle1, 0, buf)
+
+        handle1.on_oplock_break(lambda level: level)
+
+        handle2 = chan.create(tree,
+                          'oplock.txt',
+                          share=share_all,
+                          oplock_level=pike.smb2.SMB2_OPLOCK_LEVEL_II).result()
+        time.sleep(1)
+        self.logger.info("oplock after second open state %s" % (
+            handle1.oplock_level))
+        exclusive_noblock = [(8, 8,
+                          pike.smb2.SMB2_LOCKFLAG_EXCLUSIVE_LOCK |
+                          pike.smb2.SMB2_LOCKFLAG_FAIL_IMMEDIATELY)]        
+        chan.lock(handle2, exclusive_noblock).result()
+        time.sleep(1)
+        self.logger.info("oplock final state %s" % (
+            handle1.oplock_level))
+        chan.close(handle2)
+        chan.close(handle1)
