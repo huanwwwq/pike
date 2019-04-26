@@ -3244,6 +3244,18 @@ class RequestResumeKeyRequest(IoctlInput):
     def  _encode(self, cur):
         pass
 
+class NetworkResiliencyRequestRequest(IoctlInput):
+    ioctl_ctl_code = FSCTL_LMR_REQUEST_RESILIENCY
+
+    def __init__(self, parent):
+        IoctlInput.__init__(self, parent)
+        self.timeout = 0
+        self.reserved = 0
+
+    def  _encode(self, cur):
+        cur.encode_uint32le(self.timeout)
+        cur.encode_uint32le(self.reserved)
+
 class CopyChunkCopyRequest(IoctlInput):
     ioctl_ctl_code = FSCTL_SRV_COPYCHUNK
 
@@ -3263,6 +3275,9 @@ class CopyChunkCopyRequest(IoctlInput):
         #encode the chunks
         for chunk in self._children:
             chunk.encode(cur)
+
+class CopyChunkCopyWriteRequest(CopyChunkCopyRequest):
+    ioctl_ctl_code = FSCTL_SRV_COPYCHUNK_WRITE
 
 class CopyChunk(core.Frame):
     def __init__(self, parent):
@@ -3336,6 +3351,13 @@ class RequestResumeKeyResponse(IoctlOutput):
         self.resume_key = cur.decode_bytes(24)
         self.context_length = cur.decode_uint32le()
 
+class NetworkResiliencyRequestResponse(IoctlOutput):
+
+    ioctl_ctl_code = FSCTL_LMR_REQUEST_RESILIENCY
+
+    def _decode(self, cur):
+        pass
+
 class CopyChunkCopyResponse(IoctlOutput):
    ioctl_ctl_code = FSCTL_SRV_COPYCHUNK
 
@@ -3349,6 +3371,9 @@ class CopyChunkCopyResponse(IoctlOutput):
         self.chunks_written = cur.decode_uint32le()
         self.chunk_bytes_written = cur.decode_uint32le()
         self.total_bytes_written = cur.decode_uint32le()
+
+class CopyChunkCopyWriteResponse(CopyChunkCopyResponse):
+    ioctl_ctl_code = FSCTL_SRV_COPYCHUNK_WRITE
 
 class SetReparsePointResponse(IoctlOutput):
     ioctl_ctl_code = FSCTL_SET_REPARSE_POINT

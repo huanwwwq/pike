@@ -86,6 +86,13 @@ class StateError(Exception):
 class CreditError(Exception):
     pass
 
+class RequestError(Exception):
+    def __init__(self, request, message=None):
+        if message is None:
+            message = "Could not send {0}".format(repr(request))
+        Exception.__init__(self, message)
+        self.request = request
+
 class ResponseError(Exception):
     def __init__(self, response):
         Exception.__init__(self, response.command, response.status)
@@ -821,6 +828,10 @@ class Connection(transport.Transport):
         a list of L{Future} objects, one for each corresponding
         L{smb2.Smb2} frame in the request.
         """
+        if not isinstance(req, netbios.Netbios):
+            raise RequestError(
+                    req,
+                    "{0} is not a netbios.Netbios frame".format(repr(req)))
         if self.error is not None:
             raise self.error, None, self.traceback
         futures = []
@@ -1733,19 +1744,47 @@ class Channel(object):
 
         return self.connection.transceive(smb_req.parent)[0]
 
-    def copychunk_request(self, source_file, target_file, chunks):
+    def network_resiliency_request_request(self, file, timeout):
+        smb_req = self.request(obj=file.tree)
+        ioctl_req = smb2.IoctlRequest(smb_req)
+
+        nrr_req = smb2.NetworkResiliencyRequestRequest(ioctl_req)
+        ioctl_req.file_id = file.file_id
+        ioctl_req.max_output_response = 4096
+        ioctl_req.flags = smb2.SMB2_0_IOCTL_IS_FSCTL
+        nrr_req.timeout = timeout
+        nrr_req.reserved = 0
+        return ioctl_req
+
+    def network_resiliency_request(self, file, timeout):
+        def update_handle(resp_future):
+            if resp_future.response.status == ntstatus.STATUS_SUCCESS:
+                # 3.3.5.15.9 Handling a Resiliency Request
+                file.is_durable = False
+                file.is_resilient = True
+        nrr_future = self.connection.submit(
+            self.network_resiliency_request_request(file, timeout).parent.parent
+        )[0]
+        nrr_future.then(update_handle)
+        return nrr_future.result()
+
+    def copychunk_request(self, source_file, target_file, chunks, resume_key=None, write_flag=False):
         """
         @param source_file: L{Open}
         @param target_file: L{Open}
         @param chunks: sequence of tuples (source_offset, target_offset, length)
         """
-        resume_key = self.resume_key(source_file)[0][0].resume_key
+        if not resume_key:
+            resume_key = self.resume_key(source_file)[0][0].resume_key
 
         smb_req = self.request(obj=target_file.tree)
         ioctl_req = smb2.IoctlRequest(smb_req)
-        copychunk_req = smb2.CopyChunkCopyRequest(ioctl_req)
+        if write_flag:
+            copychunk_req = smb2.CopyChunkCopyWriteRequest(ioctl_req)
+        else:
+            copychunk_req = smb2.CopyChunkCopyRequest(ioctl_req)
 
-        ioctl_req.max_output_response = 16384
+        ioctl_req.max_output_response = 12
         ioctl_req.file_id = target_file.file_id
         ioctl_req.flags |= smb2.SMB2_0_IOCTL_IS_FSCTL
         copychunk_req.source_key = resume_key
@@ -1758,7 +1797,7 @@ class Channel(object):
             chunk.length = length
         return ioctl_req
 
-    def copychunk(self, source_file, target_file, chunks):
+    def copychunk(self, source_file, target_file, chunks, resume_key=None, write_flag=False):
         """
         @param source_file: L{Open}
         @param target_file: L{Open}
@@ -1768,7 +1807,9 @@ class Channel(object):
                 self.copychunk_request(
                     source_file,
                     target_file,
-                    chunks).parent.parent)[0]
+                    chunks,
+                    resume_key,
+                    write_flag).parent.parent)[0]
 
     def set_symlink_request(self, file, target_name, flags):
         smb_req = self.request(obj=file.tree)
@@ -1901,11 +1942,16 @@ class Open(object):
         self.file_id = self.create_response.file_id
         self.oplock_level = self.create_response.oplock_level
         self.lease = None
+        self.is_durable = False
+        self.is_resilient = False
+        self.is_persistent = False
         self.durable_timeout = None
         self.durable_flags = None
         self.create_guid = create_guid
 
         if prev is not None:
+            self.is_durable = prev.is_durable
+            self.is_resilient = prev.is_resilient
             self.durable_timeout = prev.durable_timeout
             self.durable_flags = prev.durable_flags
 
@@ -1918,12 +1964,25 @@ class Open(object):
             else:
                 self.arm_oplock_future()
 
+        durable_res = filter(
+            lambda c: isinstance(c, smb2.DurableHandleResponse),
+            self.create_response)
+
+        if durable_res != []:
+            self.is_durable = True
+
         durable_v2_res = filter(
                 lambda c: isinstance(c, smb2.DurableHandleV2Response),
                 self.create_response)
         if durable_v2_res != []:
             self.durable_timeout = durable_v2_res[0].timeout
             self.durable_flags = durable_v2_res[0].flags
+
+        if self.durable_flags is not None:
+            self.is_durable = True
+            if self.durable_flags & smb2.SMB2_DHANDLE_FLAG_PERSISTENT != 0:
+                self.is_persistent = True
+
 
     def arm_oplock_future(self):
         """
